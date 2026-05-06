@@ -1,0 +1,4 @@
+{"id":"sample-1","dataset":"gsm8k","question":"Jan has 3 apples and buys 4 more. How many apples does she have?","answer":"#### 7","prediction":"Jan has 3 + 4 = 7 apples. #### 7","difficulty_group":"easy"}
+{"id":"sample-2","dataset":"gsm8k","question":"A box has 12 pencils. Tom gives away one third of them. How many are left?","answer":"#### 8","prediction":"One third of 12 is 4, so 12 - 4 = 8. #### 8","difficulty_group":"medium"}
+{"id":"sample-3","dataset":"math","question":"What is 2^5?","answer":"\\boxed{32}","prediction":"2^5 = 16. \\boxed{16}","difficulty_group":"easy"}
+

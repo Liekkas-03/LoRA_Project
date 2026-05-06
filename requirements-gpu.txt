@@ -1,0 +1,19 @@
+# Cloud GPU training dependencies. Install this on AutoDL or another GPU host,
+# not on the local lightweight workspace.
+
+accelerate
+bitsandbytes
+datasets
+peft
+protobuf
+pyyaml
+sentencepiece
+sympy
+tensorboard
+transformers
+trl
+
+# Optional for later serving/demo on the cloud:
+# gradio
+# vllm
+

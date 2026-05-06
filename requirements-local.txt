@@ -1,0 +1,9 @@
+# Local lightweight environment.
+# No mandatory package is required for the current local scripts.
+# Keep this file small. Do not add PyTorch, CUDA, Transformers, PEFT,
+# bitsandbytes, vLLM, or model-download dependencies here.
+#
+# Optional small packages may be added later only if needed, for example:
+# sympy
+# pyyaml
+

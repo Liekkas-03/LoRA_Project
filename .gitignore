@@ -1,0 +1,36 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Logs and experiment artifacts
+outputs/adapters/
+outputs/checkpoints/
+outputs/logs/
+outputs/reports/
+!outputs/reports/.gitkeep
+*.log
+
+# Large model and dataset artifacts
+models/
+checkpoints/
+data/raw/
+data/processed/
+data/cache/
+*.safetensors
+*.bin
+*.pt
+*.pth
+
+# Experiment trackers and local secrets
+wandb/
+.env
+.env.*
+
+# Local editor files
+.vscode/
+.idea/
