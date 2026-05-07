@@ -2,6 +2,9 @@
 
 This helper is lightweight and does not import PyTorch or PEFT. The generated
 JSON can later be converted into a PEFT LoraConfig on the cloud GPU machine.
+
+本文件负责生成自适应 LoRA 的 rank_pattern 和 alpha_pattern 模板，
+后续可在 AutoDL 上接入 PEFT 的 LoraConfig，实现不同层使用不同 rank。
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ DEFAULT_MODULES = (
 
 
 def parse_indices(raw: str) -> set[int]:
+    # 将 "0-3,8" 这类层编号字符串解析成整数集合。
     indices: set[int] = set()
     if not raw:
         return indices
@@ -47,10 +51,12 @@ def build_patterns(
     high_r: int,
     modules: tuple[str, ...] = DEFAULT_MODULES,
 ) -> dict[str, dict[str, int]]:
+    # 按层编号和模块名生成 rank/alpha 配置，供 PEFT 后续匹配模型参数名。
     rank_pattern: dict[str, int] = {}
     alpha_pattern: dict[str, int] = {}
 
     for layer_idx in range(num_layers):
+        # 高敏感层用更大 rank，低敏感层用更小 rank，其余层使用默认 rank。
         if layer_idx in high_layers:
             rank = high_r
         elif layer_idx in low_layers:
@@ -59,6 +65,7 @@ def build_patterns(
             rank = mid_r
 
         for module in modules:
+            # pattern 用正则匹配类似 layers.20.xxx.q_proj 的模块名。
             pattern = rf".*layers\.{layer_idx}\..*{module}$"
             rank_pattern[pattern] = rank
             alpha_pattern[pattern] = rank * 2
@@ -67,6 +74,7 @@ def build_patterns(
 
 
 def main() -> None:
+    # 命令行入口：根据层范围和 rank 参数生成 JSON 配置文件。
     parser = argparse.ArgumentParser(description="Generate adaptive LoRA rank/alpha pattern JSON.")
     parser.add_argument("--num-layers", type=int, default=28)
     parser.add_argument("--low-layers", default="0-3")
@@ -94,4 +102,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

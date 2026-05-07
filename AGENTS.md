@@ -35,6 +35,13 @@ This repository is for the LoRA/QLoRA mathematical reasoning fine-tuning project
   - `outputs/adapters/adaqlora_math`
 - Avoid names like `da_qlora_qwen_math` because they use too many fragments and are harder to scan.
 
+## Code Comment Policy
+
+- For every source file we create or substantially edit, add a short Chinese comment near the top explaining the file's purpose.
+- For functions we write, add a small amount of Chinese comments explaining what the function does.
+- Keep comments concise and useful; avoid line-by-line narration or comments that simply restate obvious code.
+- English docstrings may remain, but Chinese explanatory comments should be present for the user's learning and review.
+
 ## Collaboration Notes
 
 - When starting substantial work, check this file first.

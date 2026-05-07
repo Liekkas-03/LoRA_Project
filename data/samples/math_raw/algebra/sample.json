@@ -1,0 +1,7 @@
+{
+  "problem": "What is 2^5?",
+  "level": "Level 1",
+  "type": "algebra",
+  "solution": "We compute 2^5 = 32. Therefore the answer is \\boxed{32}."
+}
+

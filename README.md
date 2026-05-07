@@ -36,13 +36,21 @@ LoRA_Project/
   data/
     samples/
       math_preds.jsonl
+      gsm8k_raw.jsonl
+      math_raw/
   docs/
     autodl_setup.md
+    data_protocol.md
+    baseline_run.md
   scripts/
     local_smoke.ps1
     autodl_train.sh
   src/
     data/
+      prepare_gsm8k.py
+      prepare_math.py
+      split_data.py
+      merge_data.py
       difficulty_scorer.py
     eval/
       extract_answer.py
@@ -61,6 +69,17 @@ LoRA_Project/
 ## 本地可做的事
 
 本地只运行标准库脚本，不需要安装重依赖。
+
+准备小样例数据：
+
+```powershell
+python -m src.data.prepare_gsm8k --input data\samples\gsm8k_raw.jsonl --output outputs\reports\gsm8k_prepared_sample.jsonl --split train
+python -m src.data.prepare_math --input-dir data\samples\math_raw --output outputs\reports\math_prepared_sample.jsonl --split train
+python -m src.data.split_data --input outputs\reports\gsm8k_prepared_sample.jsonl --train-output outputs\reports\gsm8k_train_sample.jsonl --dev-output outputs\reports\gsm8k_dev_sample.jsonl --dev-ratio 0.5 --seed 42
+python -m src.data.merge_data --inputs outputs\reports\gsm8k_train_sample.jsonl outputs\reports\math_prepared_sample.jsonl --output outputs\reports\train_sample.jsonl
+```
+
+评测小样例预测：
 
 ```powershell
 python -m src.eval.evaluate_accuracy --input data\samples\math_preds.jsonl
@@ -94,7 +113,7 @@ bash scripts/autodl_train.sh configs/qlora_math.yaml
 bash scripts/autodl_train.sh configs/adaqlora_math.yaml
 ```
 
-详细云端说明见 [docs/autodl_setup.md](docs/autodl_setup.md)。
+详细云端说明见 [docs/autodl_setup.md](docs/autodl_setup.md)，baseline 运行清单见 [docs/baseline_run.md](docs/baseline_run.md)。
 
 ## 第一阶段目标
 
@@ -103,3 +122,5 @@ bash scripts/autodl_train.sh configs/adaqlora_math.yaml
 3. 建立 zero-shot/few-shot baseline 评测脚本。
 4. 在 AutoDL 上跑通 QLoRA baseline。
 5. 加入难度分层、rank pattern、curriculum 和 replay 消融。
+
+数据协议见 [docs/data_protocol.md](docs/data_protocol.md)。

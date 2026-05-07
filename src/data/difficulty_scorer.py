@@ -1,5 +1,8 @@
 """Heuristic difficulty scoring for math reasoning datasets."""
 
+# 本文件负责给数学推理样本打启发式难度分，并划分为 easy/medium/hard，
+# 后续用于分难度评测、课程学习和自适应 LoRA rank 分配。
+
 from __future__ import annotations
 
 import argparse
@@ -13,10 +16,12 @@ OPERATOR_RE = re.compile(r"[\+\-\*/=^]|\\frac|\\sqrt|\\binom")
 
 
 def _text(record: dict[str, Any], *fields: str) -> str:
+    # 从样本中取多个可能的文本字段，并拼成统一字符串。
     return " ".join(str(record.get(field, "")) for field in fields if record.get(field))
 
 
 def parse_math_level(record: dict[str, Any]) -> int:
+    # 解析 MATH 数据集里的 Level 字段，得到 0-5 的难度等级。
     raw = str(record.get("level", ""))
     match = re.search(r"(\d+)", raw)
     if not match:
@@ -25,6 +30,7 @@ def parse_math_level(record: dict[str, Any]) -> int:
 
 
 def estimate_solution_steps(solution: str) -> int:
+    # 根据标准解答的行数或句子数，粗略估计解题步骤数量。
     if not solution:
         return 0
     line_steps = len([line for line in solution.splitlines() if line.strip()])
@@ -33,6 +39,7 @@ def estimate_solution_steps(solution: str) -> int:
 
 
 def expression_complexity(text: str) -> int:
+    # 统计数字、运算符和长 token 数量，作为表达式复杂度信号。
     numbers = len(re.findall(r"-?\d+(?:\.\d+)?", text))
     operators = len(OPERATOR_RE.findall(text))
     long_tokens = len([token for token in re.split(r"\s+", text) if len(token) > 12])
@@ -40,6 +47,7 @@ def expression_complexity(text: str) -> int:
 
 
 def dataset_base_score(dataset: str) -> float:
+    # 不同数据集给不同基础难度，MATH 默认比 GSM8K 更难。
     name = dataset.lower()
     if name == "math":
         return 2.0
@@ -49,6 +57,7 @@ def dataset_base_score(dataset: str) -> float:
 
 
 def difficulty_score(record: dict[str, Any]) -> float:
+    # 综合数据集来源、官方等级、步骤数和表达式复杂度，得到连续难度分。
     dataset = str(record.get("dataset", ""))
     question = _text(record, "question", "problem")
     solution = _text(record, "solution", "answer")
@@ -64,6 +73,7 @@ def difficulty_score(record: dict[str, Any]) -> float:
 
 
 def difficulty_group(score: float) -> str:
+    # 将连续难度分映射成 easy/medium/hard 三档。
     if score < 2.0:
         return "easy"
     if score < 3.6:
@@ -72,6 +82,7 @@ def difficulty_group(score: float) -> str:
 
 
 def score_file(input_path: Path, output_path: Path) -> dict[str, int]:
+    # 处理整个 JSONL 文件，为每条样本写入 difficulty_score 和 difficulty_group。
     counts = {"easy": 0, "medium": 0, "hard": 0}
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -95,6 +106,7 @@ def score_file(input_path: Path, output_path: Path) -> dict[str, int]:
 
 
 def main() -> None:
+    # 命令行入口：读取原始 JSONL，输出带难度字段的新 JSONL。
     parser = argparse.ArgumentParser(description="Add heuristic difficulty scores to JSONL math records.")
     parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)
@@ -106,4 +118,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

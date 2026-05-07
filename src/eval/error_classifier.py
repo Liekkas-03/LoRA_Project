@@ -1,5 +1,8 @@
 """Classify coarse math reasoning errors from prediction JSONL files."""
 
+# 本文件负责给数学题预测结果添加粗粒度错误类型标签，
+# 为后续 verifier-guided replay 和错误分析提供基础数据。
+
 from __future__ import annotations
 
 import argparse
@@ -12,6 +15,7 @@ from src.eval.math_verifier import equivalent, looks_like_number
 
 
 def classify_error(prediction: str, reference: str) -> str:
+    # 对单条预测进行错误分类：先抽答案，再判断正确、格式错误或答案错误等。
     pred_answer = extract_answer(prediction)
     ref_answer = extract_answer(reference)
 
@@ -35,6 +39,7 @@ def transform_records(
     prediction_field: str,
     answer_field: str,
 ) -> dict[str, int]:
+    # 处理整个 JSONL 文件，为每条样本添加 error_type 字段，并统计各类错误数量。
     counts: dict[str, int] = {}
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -44,6 +49,7 @@ def transform_records(
             if not line:
                 continue
             record: dict[str, Any] = json.loads(line)
+            # 根据模型预测和标准答案生成错误类型标签。
             error_type = classify_error(str(record.get(prediction_field, "")), str(record.get(answer_field, "")))
             record["error_type"] = error_type
             counts[error_type] = counts.get(error_type, 0) + 1
@@ -53,6 +59,7 @@ def transform_records(
 
 
 def main() -> None:
+    # 命令行入口：读取预测文件，输出带 error_type 的新 JSONL 文件。
     parser = argparse.ArgumentParser(description="Add coarse error_type labels to math prediction JSONL.")
     parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)
@@ -71,4 +78,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

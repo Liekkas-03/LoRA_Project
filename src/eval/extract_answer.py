@@ -18,6 +18,7 @@ FINAL_ANSWER_RE = re.compile(
 
 
 def strip_latex_wrappers(text: str) -> str:
+    # 清理答案外层常见的 LaTeX 包装，便于后续做字符串或数值比较。
     value = text.strip()
     value = value.replace("\\left", "").replace("\\right", "")
     value = value.replace("$", "")
@@ -25,6 +26,7 @@ def strip_latex_wrappers(text: str) -> str:
 
 
 def extract_boxed(text: str) -> str | None:
+    # 抽取数学题里常见的最终答案格式：\boxed{...}。
     matches = BOXED_RE.findall(text)
     if not matches:
         return None
@@ -32,6 +34,7 @@ def extract_boxed(text: str) -> str | None:
 
 
 def extract_gsm8k_hash_answer(text: str) -> str | None:
+    # 抽取 GSM8K 标准答案格式：#### 7。
     matches = GSM8K_RE.findall(text)
     if not matches:
         return None
@@ -39,6 +42,7 @@ def extract_gsm8k_hash_answer(text: str) -> str | None:
 
 
 def extract_after_final_answer(text: str) -> str | None:
+    # 抽取自然语言里的答案提示，例如 "final answer is 7"。
     matches = FINAL_ANSWER_RE.findall(text)
     if not matches:
         return None
@@ -46,6 +50,7 @@ def extract_after_final_answer(text: str) -> str | None:
 
 
 def extract_last_number(text: str) -> str | None:
+    # 兜底策略：如果没有明确答案标记，就取文本中的最后一个数字。
     numbers = re.findall(r"-?\d+(?:,\d{3})*(?:\.\d+)?(?:/\d+)?", text)
     if not numbers:
         return None
@@ -58,6 +63,7 @@ def extract_answer(text: str | None) -> str | None:
     if not text:
         return None
 
+    # 按可信度从高到低尝试抽取答案，最后一个数字只作为兜底。
     for extractor in (
         extract_gsm8k_hash_answer,
         extract_boxed,
@@ -82,4 +88,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
