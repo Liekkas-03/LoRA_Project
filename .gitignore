@@ -25,6 +25,8 @@ data/cache/
 *.bin
 *.pt
 *.pth
+*.tar.gz
+*.tgz
 
 # Experiment trackers and local secrets
 wandb/

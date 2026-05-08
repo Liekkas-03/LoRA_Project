@@ -39,6 +39,7 @@ LoRA_Project/
       gsm8k_raw.jsonl
       math_raw/
   docs/
+    autodl_steps.md
     autodl_setup.md
     data_protocol.md
     baseline_run.md
@@ -59,6 +60,8 @@ LoRA_Project/
       error_classifier.py
     lora/
       rank_allocator.py
+    infer/
+      generate_answers.py
     train/
       train_sft.py
   outputs/
@@ -95,11 +98,33 @@ powershell -ExecutionPolicy Bypass -File scripts\local_smoke.ps1
 
 ## 云端训练流程
 
-AutoDL 上再安装 GPU 依赖：
+AutoDL 上不要直接在系统盘默认 miniconda 环境里安装 GPU 依赖。推荐先在数据盘安装自己的 Miniconda，再安装 PyTorch 和项目依赖：
 
 ```bash
-pip install -r requirements-gpu.txt
+cd /root/autodl-tmp
+mkdir -p /root/autodl-tmp/installers /root/autodl-tmp/pip_cache /root/autodl-tmp/hf_cache /root/autodl-tmp/conda_pkgs
+if [ ! -d /root/autodl-tmp/miniconda3 ]; then
+  wget -O /root/autodl-tmp/installers/miniconda.sh https://mirrors.tuna.tsinghua.edu.cn/anaconda/miniconda/Miniconda3-latest-Linux-x86_64.sh
+  bash /root/autodl-tmp/installers/miniconda.sh
+fi
+source /root/autodl-tmp/miniconda3/bin/activate
+conda init
+source ~/.bashrc
+export CONDA_PKGS_DIRS=/root/autodl-tmp/conda_pkgs
+if ! conda env list | grep -q "/root/autodl-tmp/miniconda3/envs/lora"; then
+  conda create -n lora python=3.10 -y
+fi
+conda activate lora
+export PIP_CACHE_DIR=/root/autodl-tmp/pip_cache
+export HF_HOME=/root/autodl-tmp/hf_cache
+export HF_ENDPOINT=https://hf-mirror.com
+python -m pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple
+pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+cd /root/autodl-tmp/LoRA_Project
+pip install --no-cache-dir -r requirements-gpu.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
+
+详细步骤见 [docs/autodl_steps.md](docs/autodl_steps.md)，里面也写了如何使用镜像中已经配好的 Qwen 7B 本地模型。
 
 启动 QLoRA baseline：
 
@@ -113,7 +138,7 @@ bash scripts/autodl_train.sh configs/qlora_math.yaml
 bash scripts/autodl_train.sh configs/adaqlora_math.yaml
 ```
 
-详细云端说明见 [docs/autodl_setup.md](docs/autodl_setup.md)，baseline 运行清单见 [docs/baseline_run.md](docs/baseline_run.md)。
+详细云端说明见 [docs/autodl_setup.md](docs/autodl_setup.md)，baseline 运行清单见 [docs/baseline_run.md](docs/baseline_run.md)，可直接照做的 AutoDL 步骤见 [docs/autodl_steps.md](docs/autodl_steps.md)。
 
 ## 第一阶段目标
 

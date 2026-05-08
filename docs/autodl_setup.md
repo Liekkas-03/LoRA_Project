@@ -27,15 +27,42 @@ cd LoRA_Project
 cd LoRA_Project
 ```
 
-## 3. 安装云端依赖
+## 3. 安装云端依赖到数据盘
 
-在 AutoDL 上执行：
+不要直接在系统盘默认 miniconda 环境里执行 `pip install -r requirements-gpu.txt`，否则依赖会装到 `/root/miniconda3`，容易把系统盘占满。
+
+推荐在数据盘 `/root/autodl-tmp` 中安装自己的 Miniconda，之后 conda 环境和 pip 包都安装到数据盘：
 
 ```bash
-pip install -r requirements-gpu.txt
+cd /root/autodl-tmp
+mkdir -p /root/autodl-tmp/installers /root/autodl-tmp/pip_cache /root/autodl-tmp/hf_cache /root/autodl-tmp/conda_pkgs
+
+if [ ! -d /root/autodl-tmp/miniconda3 ]; then
+  wget -O /root/autodl-tmp/installers/miniconda.sh https://mirrors.tuna.tsinghua.edu.cn/anaconda/miniconda/Miniconda3-latest-Linux-x86_64.sh
+  bash /root/autodl-tmp/installers/miniconda.sh
+fi
+
+source /root/autodl-tmp/miniconda3/bin/activate
+conda init
+source ~/.bashrc
+export CONDA_PKGS_DIRS=/root/autodl-tmp/conda_pkgs
+if ! conda env list | grep -q "/root/autodl-tmp/miniconda3/envs/lora"; then
+  conda create -n lora python=3.10 -y
+fi
+conda activate lora
+
+export PIP_CACHE_DIR=/root/autodl-tmp/pip_cache
+export HF_HOME=/root/autodl-tmp/hf_cache
+export HF_ENDPOINT=https://hf-mirror.com
+
+python -m pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple
+pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+
+cd /root/autodl-tmp/LoRA_Project
+pip install --no-cache-dir -r requirements-gpu.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
-如果镜像中已经安装了 PyTorch，不建议重复安装 PyTorch。优先使用镜像自带版本。
+运行安装脚本时，前面一路按 Enter 或输入 yes；当它提示安装路径并默认显示 `/root/miniconda3` 时，必须改成 `/root/autodl-tmp/miniconda3`。安装依赖前确认 `which python`、`which pip` 和 `python -c "import sys; print(sys.prefix)"` 都指向 `/root/autodl-tmp/miniconda3/envs/lora`。
 
 ## 4. 准备数据
 

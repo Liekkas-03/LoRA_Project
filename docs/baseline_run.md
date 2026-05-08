@@ -14,13 +14,38 @@
 
 ## 1. 云端环境
 
-建议选择 AutoDL 中已经预装 PyTorch/CUDA 的镜像。进入项目目录后安装云端依赖：
+建议选择 AutoDL 中已经配好 Qwen 7B 的镜像。不要直接在系统盘默认 miniconda 环境里安装项目依赖，推荐在数据盘安装自己的 Miniconda，再把 PyTorch 和项目依赖都装到数据盘 conda 环境：
 
 ```bash
-pip install -r requirements-gpu.txt
+cd /root/autodl-tmp
+mkdir -p /root/autodl-tmp/installers /root/autodl-tmp/pip_cache /root/autodl-tmp/hf_cache /root/autodl-tmp/conda_pkgs
+
+if [ ! -d /root/autodl-tmp/miniconda3 ]; then
+  wget -O /root/autodl-tmp/installers/miniconda.sh https://mirrors.tuna.tsinghua.edu.cn/anaconda/miniconda/Miniconda3-latest-Linux-x86_64.sh
+  bash /root/autodl-tmp/installers/miniconda.sh
+fi
+
+source /root/autodl-tmp/miniconda3/bin/activate
+conda init
+source ~/.bashrc
+export CONDA_PKGS_DIRS=/root/autodl-tmp/conda_pkgs
+if ! conda env list | grep -q "/root/autodl-tmp/miniconda3/envs/lora"; then
+  conda create -n lora python=3.10 -y
+fi
+conda activate lora
+
+export PIP_CACHE_DIR=/root/autodl-tmp/pip_cache
+export HF_HOME=/root/autodl-tmp/hf_cache
+export HF_ENDPOINT=https://hf-mirror.com
+
+python -m pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple
+pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+
+cd /root/autodl-tmp/LoRA_Project
+pip install --no-cache-dir -r requirements-gpu.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
-如果镜像已经带 PyTorch，不建议手动重装 PyTorch，避免 CUDA 版本冲突。
+运行安装脚本时，前面一路按 Enter 或输入 yes；当它提示安装路径并默认显示 `/root/miniconda3` 时，必须改成 `/root/autodl-tmp/miniconda3`。这样 Miniconda、环境、PyTorch、项目依赖和缓存都会尽量留在 `/root/autodl-tmp`，减少系统盘占用。
 
 ## 2. 准备原始数据
 
@@ -107,10 +132,57 @@ adapter_model.safetensors
 tokenizer_config.json
 ```
 
-## 8. 注意事项
+## 8. 生成答案并评测准确率
+
+训练只会保存 adapter 和训练日志。要得到数学题准确率，需要在云端加载 base model + adapter 生成预测：
+
+```bash
+cd /root/autodl-tmp/LoRA_Project
+
+bash scripts/autodl_generate.sh \
+  /root/Qwen2.5/text-generation-webui/models/Qwen2.5-7B-Instruct \
+  outputs/adapters/qlora_math \
+  data/processed/dev.jsonl \
+  outputs/reports/dev_preds.jsonl \
+  256
+```
+
+然后计算最终答案准确率：
+
+```bash
+python -m src.eval.evaluate_accuracy \
+  --input outputs/reports/dev_preds.jsonl \
+  --output outputs/reports/dev_metrics.json
+```
+
+`dev_preds.jsonl` 是模型逐题生成结果，`dev_metrics.json` 是总体和分难度准确率结果。
+
+## 9. 导出训练结果到本地
+
+训练结果不建议直接提交 GitHub。先在 AutoDL 上压缩 adapter：
+
+```bash
+cd /root/autodl-tmp/LoRA_Project
+tar -czf qlora_math_adapter.tar.gz outputs/adapters/qlora_math
+ls -lh qlora_math_adapter.tar.gz
+```
+
+然后可以在 AutoDL JupyterLab 左侧文件栏中右键下载，也可以在本地 PowerShell 使用 `scp`：
+
+```powershell
+scp -P 端口 root@服务器IP:/root/autodl-tmp/LoRA_Project/qlora_math_adapter.tar.gz D:\LoRA_Project\outputs\adapters\
+```
+
+下载到本地后解压：
+
+```powershell
+cd D:\LoRA_Project
+tar -xzf outputs\adapters\qlora_math_adapter.tar.gz
+```
+
+## 10. 注意事项
 
 - 第一次 baseline 只追求跑通，不要急着调参数。
 - 如果显存不足，优先降低 `max_seq_length` 到 `1024`，或增大 `gradient_accumulation_steps` 并保持 batch size 为 `1`。
 - 如果下载模型很慢，可以在 AutoDL 上提前配置 Hugging Face 镜像或模型缓存。
 - 训练日志、adapter 和 checkpoint 不提交 Git。
-
