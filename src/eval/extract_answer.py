@@ -1,16 +1,17 @@
-"""Answer extraction helpers for math reasoning outputs.
+"""数学答案抽取工具。
 
-These utilities intentionally use only the Python standard library so they can
-run in the local lightweight workspace.
+本文件只使用 Python 标准库，方便在本地轻量环境运行。它负责从模型
+输出或标准解答中抽取最终答案，例如 `\boxed{32}` 或 `Final Answer: 32`。
 """
 
 from __future__ import annotations
 
+import argparse
 import re
 
 
 BOXED_RE = re.compile(r"\\boxed\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}")
-GSM8K_RE = re.compile(r"####\s*([^\n\r]+)")
+HASH_RE = re.compile(r"####\s*([^\n\r]+)")
 FINAL_ANSWER_RE = re.compile(
     r"(?:final answer|answer|therefore|so)\s*(?:is|=|:)?\s*([^\n\r.]+)",
     re.IGNORECASE,
@@ -18,7 +19,7 @@ FINAL_ANSWER_RE = re.compile(
 
 
 def strip_latex_wrappers(text: str) -> str:
-    # 清理答案外层常见的 LaTeX 包装，便于后续做字符串或数值比较。
+    # 去掉常见 LaTeX 外壳，降低格式差异对判分的影响。
     value = text.strip()
     value = value.replace("\\left", "").replace("\\right", "")
     value = value.replace("$", "")
@@ -26,23 +27,23 @@ def strip_latex_wrappers(text: str) -> str:
 
 
 def extract_boxed(text: str) -> str | None:
-    # 抽取数学题里常见的最终答案格式：\boxed{...}。
+    # 优先抽取 MATH 标准解答中最常见的 \boxed{...}。
     matches = BOXED_RE.findall(text)
     if not matches:
         return None
     return strip_latex_wrappers(matches[-1])
 
 
-def extract_gsm8k_hash_answer(text: str) -> str | None:
-    # 抽取 GSM8K 标准答案格式：#### 7。
-    matches = GSM8K_RE.findall(text)
+def extract_hash_answer(text: str) -> str | None:
+    # 兼容模型可能输出的 #### answer 格式。
+    matches = HASH_RE.findall(text)
     if not matches:
         return None
     return strip_latex_wrappers(matches[-1])
 
 
 def extract_after_final_answer(text: str) -> str | None:
-    # 抽取自然语言里的答案提示，例如 "final answer is 7"。
+    # 抽取自然语言提示后的答案，例如 "Final Answer: 7"。
     matches = FINAL_ANSWER_RE.findall(text)
     if not matches:
         return None
@@ -50,7 +51,7 @@ def extract_after_final_answer(text: str) -> str | None:
 
 
 def extract_last_number(text: str) -> str | None:
-    # 兜底策略：如果没有明确答案标记，就取文本中的最后一个数字。
+    # 兜底策略：没有明确答案标记时，取最后一个数字。
     numbers = re.findall(r"-?\d+(?:,\d{3})*(?:\.\d+)?(?:/\d+)?", text)
     if not numbers:
         return None
@@ -58,15 +59,13 @@ def extract_last_number(text: str) -> str | None:
 
 
 def extract_answer(text: str | None) -> str | None:
-    """Extract a final answer from a model prediction or reference solution."""
-
+    # 按可信度从高到低尝试不同抽取规则。
     if not text:
         return None
 
-    # 按可信度从高到低尝试抽取答案，最后一个数字只作为兜底。
     for extractor in (
-        extract_gsm8k_hash_answer,
         extract_boxed,
+        extract_hash_answer,
         extract_after_final_answer,
         extract_last_number,
     ):
@@ -77,8 +76,7 @@ def extract_answer(text: str | None) -> str | None:
 
 
 def main() -> None:
-    import argparse
-
+    # 命令行入口：快速查看一段文本会被抽成什么答案。
     parser = argparse.ArgumentParser(description="Extract a math final answer.")
     parser.add_argument("text", help="Prediction or reference text.")
     args = parser.parse_args()

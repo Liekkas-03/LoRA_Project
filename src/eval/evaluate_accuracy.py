@@ -1,6 +1,8 @@
-"""Evaluate final-answer accuracy from a JSONL prediction file."""
+"""从 prediction JSONL 计算数学最终答案准确率。
 
-# 本文件负责读取数学题预测结果 JSONL，抽取答案、判断正误，并统计整体和分组准确率。
+本文件读取云端生成的预测结果，抽取最终答案，与数据集自带标准
+answer 比较，并输出整体与分难度准确率。
+"""
 
 from __future__ import annotations
 
@@ -15,7 +17,7 @@ from src.eval.math_verifier import equivalent
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
-    # 读取 JSONL 文件，每一行对应一条样本记录。
+    # 读取预测 JSONL 文件。
     records: list[dict[str, Any]] = []
     with path.open("r", encoding="utf-8") as handle:
         for line_no, line in enumerate(handle, start=1):
@@ -35,7 +37,7 @@ def evaluate_records(
     answer_field: str,
     group_field: str,
 ) -> dict[str, Any]:
-    # 对一批样本逐条抽答案、判等价，并汇总整体与分组指标。
+    # 逐条抽答案、判等价，并统计整体与分组指标。
     total = 0
     correct = 0
     missing_prediction = 0
@@ -43,7 +45,6 @@ def evaluate_records(
     grouped: dict[str, dict[str, int]] = defaultdict(lambda: {"total": 0, "correct": 0})
 
     for record in records:
-        # prediction 是模型输出，answer 是标准答案；两者都先抽取最终答案再比较。
         pred_answer = extract_answer(str(record.get(prediction_field, "")))
         ref_answer = extract_answer(str(record.get(answer_field, "")))
         group = str(record.get(group_field, "unknown"))
@@ -60,7 +61,6 @@ def evaluate_records(
         grouped[group]["correct"] += int(is_correct)
 
     group_metrics = {
-        # 分组指标用于观察 easy/medium/hard 等不同难度上的表现。
         group: {
             "total": stats["total"],
             "correct": stats["correct"],
@@ -80,7 +80,7 @@ def evaluate_records(
 
 
 def main() -> None:
-    # 命令行入口：读取输入文件，打印评测报告，并可选写入 JSON 文件。
+    # 命令行入口：打印评测报告，并可选写入 JSON 文件。
     parser = argparse.ArgumentParser(description="Evaluate math final-answer accuracy.")
     parser.add_argument("--input", required=True, help="JSONL file with predictions and references.")
     parser.add_argument("--prediction-field", default="prediction")

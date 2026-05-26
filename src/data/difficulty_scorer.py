@@ -1,7 +1,8 @@
-"""Heuristic difficulty scoring for math reasoning datasets."""
+"""为 MATH 数据集样本写入官方难度标签。
 
-# 本文件负责给数学推理样本打启发式难度分，并划分为 easy/medium/hard，
-# 后续用于分难度评测、课程学习和自适应 LoRA rank 分配。
+本文件只服务于当前 MATH-only 主线：读取样本中的官方 `level`
+字段，并转换成论文中使用的 easy/medium/hard 分组。
+"""
 
 from __future__ import annotations
 
@@ -12,102 +13,92 @@ from pathlib import Path
 from typing import Any
 
 
-OPERATOR_RE = re.compile(r"[\+\-\*/=^]|\\frac|\\sqrt|\\binom")
-
-
-def _text(record: dict[str, Any], *fields: str) -> str:
-    # 从样本中取多个可能的文本字段，并拼成统一字符串。
-    return " ".join(str(record.get(field, "")) for field in fields if record.get(field))
-
-
 def parse_math_level(record: dict[str, Any]) -> int:
-    # 解析 MATH 数据集里的 Level 字段，得到 0-5 的难度等级。
-    raw = str(record.get("level", ""))
-    match = re.search(r"(\d+)", raw)
+    # 从 "Level 3"、3 或 math_level 字段中解析 MATH 官方难度等级。
+    raw = record.get("math_level", record.get("level", ""))
+    match = re.search(r"([1-5])", str(raw))
     if not match:
-        return 0
-    return max(0, min(5, int(match.group(1))))
+        raise ValueError(f"Missing valid MATH level in record: {record.get('id', '<no id>')}")
+    return int(match.group(1))
 
 
-def estimate_solution_steps(solution: str) -> int:
-    # 根据标准解答的行数或句子数，粗略估计解题步骤数量。
-    if not solution:
-        return 0
-    line_steps = len([line for line in solution.splitlines() if line.strip()])
-    sentence_steps = len(re.findall(r"[.;]\s+", solution))
-    return max(line_steps, sentence_steps)
-
-
-def expression_complexity(text: str) -> int:
-    # 统计数字、运算符和长 token 数量，作为表达式复杂度信号。
-    numbers = len(re.findall(r"-?\d+(?:\.\d+)?", text))
-    operators = len(OPERATOR_RE.findall(text))
-    long_tokens = len([token for token in re.split(r"\s+", text) if len(token) > 12])
-    return numbers + operators + long_tokens
-
-
-def dataset_base_score(dataset: str) -> float:
-    # 不同数据集给不同基础难度，MATH 默认比 GSM8K 更难。
-    name = dataset.lower()
-    if name == "math":
-        return 2.0
-    if name == "gsm8k":
-        return 0.8
-    return 1.0
-
-
-def difficulty_score(record: dict[str, Any]) -> float:
-    # 综合数据集来源、官方等级、步骤数和表达式复杂度，得到连续难度分。
-    dataset = str(record.get("dataset", ""))
-    question = _text(record, "question", "problem")
-    solution = _text(record, "solution", "answer")
-    level = parse_math_level(record)
-    steps = estimate_solution_steps(solution)
-    complexity = expression_complexity(question + " " + solution)
-
-    score = dataset_base_score(dataset)
-    score += 0.55 * level
-    score += min(steps, 12) * 0.12
-    score += min(complexity, 40) * 0.035
-    return round(score, 4)
-
-
-def difficulty_group(score: float) -> str:
-    # 将连续难度分映射成 easy/medium/hard 三档。
-    if score < 2.0:
+def level_to_group(level: int) -> str:
+    # 将 MATH Level 1-5 合并成三档，方便论文主表和分难度分析。
+    if level in {1, 2}:
         return "easy"
-    if score < 3.6:
+    if level == 3:
         return "medium"
-    return "hard"
+    if level in {4, 5}:
+        return "hard"
+    raise ValueError(f"MATH level must be 1-5, got {level}")
 
 
-def score_file(input_path: Path, output_path: Path) -> dict[str, int]:
-    # 处理整个 JSONL 文件，为每条样本写入 difficulty_score 和 difficulty_group。
-    counts = {"easy": 0, "medium": 0, "hard": 0}
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+def assign_math_difficulty(record: dict[str, Any]) -> dict[str, Any]:
+    # 给单条样本补充统一难度字段，保留官方 level 作为可追溯依据。
+    updated = dict(record)
+    level = parse_math_level(updated)
+    updated["dataset"] = "math"
+    updated["math_level"] = level
+    updated["difficulty_score"] = float(level)
+    updated["difficulty_group"] = level_to_group(level)
+    updated["difficulty_source"] = "math_official_level"
+    return updated
 
-    with input_path.open("r", encoding="utf-8") as src, output_path.open("w", encoding="utf-8") as dst:
-        for line_no, line in enumerate(src, start=1):
+
+def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    # 读取 JSONL，每一行是一道 MATH 题或一条预测结果。
+    records: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line_no, line in enumerate(handle, start=1):
             line = line.strip()
             if not line:
                 continue
             try:
-                record = json.loads(line)
+                records.append(json.loads(line))
             except json.JSONDecodeError as exc:
-                raise ValueError(f"Invalid JSONL at {input_path}:{line_no}: {exc}") from exc
-            score = difficulty_score(record)
-            group = difficulty_group(score)
-            record["difficulty_score"] = score
-            record["difficulty_group"] = group
-            counts[group] += 1
-            dst.write(json.dumps(record, ensure_ascii=False) + "\n")
+                raise ValueError(f"Invalid JSONL at {path}:{line_no}: {exc}") from exc
+    return records
 
+
+def write_jsonl(records: list[dict[str, Any]], path: Path) -> None:
+    # 写出带官方难度字段的 JSONL 文件。
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def count_groups(records: list[dict[str, Any]]) -> dict[str, int]:
+    # 汇总 easy/medium/hard 以及 Level 1-5 的样本数量。
+    counts = {
+        "total": len(records),
+        "easy": 0,
+        "medium": 0,
+        "hard": 0,
+        "level_1": 0,
+        "level_2": 0,
+        "level_3": 0,
+        "level_4": 0,
+        "level_5": 0,
+    }
+    for record in records:
+        group = str(record["difficulty_group"])
+        level = int(record["math_level"])
+        counts[group] += 1
+        counts[f"level_{level}"] += 1
     return counts
 
 
+def score_file(input_path: Path, output_path: Path) -> dict[str, int]:
+    # 处理整个文件，用官方 MATH level 重写难度字段。
+    records = [assign_math_difficulty(record) for record in read_jsonl(input_path)]
+    write_jsonl(records, output_path)
+    return count_groups(records)
+
+
 def main() -> None:
-    # 命令行入口：读取原始 JSONL，输出带难度字段的新 JSONL。
-    parser = argparse.ArgumentParser(description="Add heuristic difficulty scores to JSONL math records.")
+    # 命令行入口：把已有 MATH JSONL 转成带官方难度字段的版本。
+    parser = argparse.ArgumentParser(description="Assign official MATH difficulty groups.")
     parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()

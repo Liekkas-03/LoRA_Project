@@ -1,7 +1,7 @@
-"""Split unified JSONL data into train/dev files with a fixed random seed.
+"""按固定随机种子划分 MATH train/dev。
 
-本文件负责把项目统一 JSONL 数据按固定随机种子划分为 train/dev，
-保证后续 replay、调参和最终测试之间有清晰的数据边界。
+本文件默认按 difficulty_group 分层抽样，避免 dev 集中某个难度段，
+使后续 QLoRA 与 AdaQLoRA 的验证结果更可比。
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from typing import Any
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
-    # 读取统一格式 JSONL 文件，每行一条样本。
+    # 读取统一 JSONL 样本。
     records: list[dict[str, Any]] = []
     with path.open("r", encoding="utf-8") as handle:
         for line_no, line in enumerate(handle, start=1):
@@ -29,7 +29,7 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def write_jsonl(records: list[dict[str, Any]], path: Path) -> None:
-    # 将划分后的样本写成 JSONL，便于后续训练或评测脚本读取。
+    # 写出划分后的 train/dev 文件。
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
         for record in records:
@@ -42,7 +42,7 @@ def split_records(
     seed: int,
     stratify_field: str | None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    # 按比例划分 train/dev；如果指定字段，则在每个分组内分别抽 dev。
+    # 如果指定分层字段，就在每个难度组内分别抽取 dev。
     if not 0 < dev_ratio < 1:
         raise ValueError(f"dev_ratio must be between 0 and 1, got {dev_ratio}")
 
@@ -74,6 +74,15 @@ def split_records(
     return train_records, dev_records
 
 
+def count_by_field(records: list[dict[str, Any]], field: str) -> dict[str, int]:
+    # 统计某个字段的分布，用于确认分层划分是否合理。
+    counts: dict[str, int] = {}
+    for record in records:
+        key = str(record.get(field, "unknown"))
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
+
+
 def split_file(
     input_path: Path,
     train_output: Path,
@@ -82,7 +91,7 @@ def split_file(
     seed: int,
     stratify_field: str | None,
 ) -> dict[str, Any]:
-    # 读取输入文件，完成划分并输出统计信息。
+    # 读取输入、完成划分，并返回 train/dev 的分布统计。
     records = read_jsonl(input_path)
     train_records, dev_records = split_records(records, dev_ratio, seed, stratify_field)
     write_jsonl(train_records, train_output)
@@ -94,11 +103,13 @@ def split_file(
         "dev_ratio": dev_ratio,
         "seed": seed,
         "stratify_field": stratify_field or "",
+        "train_distribution": count_by_field(train_records, stratify_field) if stratify_field else {},
+        "dev_distribution": count_by_field(dev_records, stratify_field) if stratify_field else {},
     }
 
 
 def main() -> None:
-    # 命令行入口：从统一 JSONL 划分出 train/dev 两个文件。
+    # 命令行入口：从 MATH train JSONL 划分出 train/dev。
     parser = argparse.ArgumentParser(description="Split project JSONL data into train/dev files.")
     parser.add_argument("--input", required=True)
     parser.add_argument("--train-output", required=True)
@@ -121,4 +132,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -12,8 +12,8 @@ model:
   bnb_4bit_use_double_quant: true
 
 data:
-  train_file: data/processed/train.jsonl
-  eval_file: data/processed/dev.jsonl
+  train_file: data/processed/math_train_split.jsonl
+  eval_file: data/processed/math_dev.jsonl
   prompt_template: math_cot
   max_seq_length: 2048
   text_field: text

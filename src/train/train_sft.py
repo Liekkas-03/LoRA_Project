@@ -1,11 +1,8 @@
-"""Cloud GPU SFT entry point.
+"""AutoDL 云端 SFT 训练入口。
 
-This file intentionally keeps imports lazy so the local workspace does not need
-PyTorch, Transformers, PEFT, TRL, or bitsandbytes installed. The actual training
-implementation should be run on AutoDL.
-
-本文件是 AutoDL 云端监督微调入口。它会读取 YAML 配置，在云端延迟导入
-PyTorch/Transformers/PEFT/TRL，并启动 QLoRA 或 AdaQLoRA 的 SFT 训练。
+本文件延迟导入 PyTorch、Transformers、PEFT、TRL 和 bitsandbytes，
+因此本地轻量环境可以读取代码而不安装重依赖。真正训练请在 AutoDL
+或其他云 GPU 环境中执行。
 """
 
 from __future__ import annotations
@@ -16,22 +13,21 @@ import json
 from pathlib import Path
 from typing import Any
 
+from src.lora.rank_allocator import build_patterns, parse_indices
 from src.train.prompting import format_example
 
 
 def load_config(config_path: Path) -> dict[str, Any]:
-    # 读取 YAML 配置；PyYAML 只在训练入口运行时导入，避免本地强依赖。
+    # 读取 YAML 配置；PyYAML 只在训练入口运行时才需要。
     try:
         import yaml  # type: ignore
     except Exception as exc:
-        raise RuntimeError(
-            "PyYAML is required for cloud training. Install requirements-gpu.txt on AutoDL first."
-        ) from exc
+        raise RuntimeError("PyYAML is required on the cloud training environment.") from exc
     return yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
 
 def torch_dtype_from_name(torch_module: Any, name: str | bool | None) -> Any:
-    # 将配置中的 dtype 字符串转换成 torch dtype 对象。
+    # 将配置中的 dtype 字符串转换成 torch dtype。
     if name is True:
         return torch_module.bfloat16
     if not name:
@@ -49,7 +45,7 @@ def torch_dtype_from_name(torch_module: Any, name: str | bool | None) -> Any:
 
 
 def build_quant_config(config: dict[str, Any], torch_module: Any, bits_config_cls: Any) -> Any:
-    # 根据 model 配置构造 4-bit QLoRA 量化配置。
+    # 根据 model 配置构造 4-bit QLoRA 量化参数。
     model_cfg = config.get("model", {})
     if not model_cfg.get("load_in_4bit", False):
         return None
@@ -63,30 +59,54 @@ def build_quant_config(config: dict[str, Any], torch_module: Any, bits_config_cl
     )
 
 
-def load_rank_patterns(path: str | None) -> tuple[dict[str, int] | None, dict[str, int] | None]:
-    # 读取 rank_allocator.py 生成的 rank_pattern/alpha_pattern JSON。
-    if not path:
-        return None, None
-    pattern_path = Path(path)
-    if not pattern_path.exists():
-        return None, None
-    patterns = json.loads(pattern_path.read_text(encoding="utf-8"))
-    return patterns.get("rank_pattern"), patterns.get("alpha_pattern")
+def read_rank_patterns(path: Path) -> tuple[dict[str, int], dict[str, int]]:
+    # 读取已经生成的 rank_pattern/alpha_pattern JSON。
+    patterns = json.loads(path.read_text(encoding="utf-8"))
+    return patterns.get("rank_pattern", {}), patterns.get("alpha_pattern", {})
+
+
+def build_rank_patterns_from_config(config: dict[str, Any]) -> tuple[dict[str, int], dict[str, int]]:
+    # 当 pattern 文件不存在时，根据 adaptive_lora 配置即时生成。
+    adaptive_cfg = config.get("adaptive_lora", {})
+    lora_cfg = config.get("lora", {})
+    rank_levels = adaptive_cfg.get("rank_levels", {})
+    modules = tuple(lora_cfg.get("target_modules", []))
+
+    patterns = build_patterns(
+        num_layers=int(adaptive_cfg.get("num_layers", 28)),
+        low_layers=parse_indices(str(adaptive_cfg.get("low_layers", "0-3"))),
+        high_layers=parse_indices(str(adaptive_cfg.get("high_layers", "18-27"))),
+        low_r=int(rank_levels.get("low", 8)),
+        mid_r=int(rank_levels.get("mid", lora_cfg.get("base_r", 16))),
+        high_r=int(rank_levels.get("high", 32)),
+        modules=modules,
+    )
+    output = adaptive_cfg.get("rank_pattern_output")
+    if output:
+        output_path = Path(output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps(patterns, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return patterns["rank_pattern"], patterns["alpha_pattern"]
+
+
+def load_or_build_rank_patterns(config: dict[str, Any]) -> tuple[dict[str, int], dict[str, int]]:
+    # AdaQLoRA 必须有 rank pattern；没有文件时自动生成，避免退化成普通 QLoRA。
+    adaptive_cfg = config.get("adaptive_lora", {})
+    output = adaptive_cfg.get("rank_pattern_output")
+    if output:
+        path = Path(output)
+        if path.exists():
+            return read_rank_patterns(path)
+    return build_rank_patterns_from_config(config)
 
 
 def build_lora_config(config: dict[str, Any], lora_config_cls: Any) -> Any:
-    # 根据配置构造 PEFT LoraConfig，AdaQLoRA 会额外尝试加载 rank/alpha pattern。
+    # 构造 PEFT LoraConfig；AdaQLoRA 会额外注入 rank_pattern 和 alpha_pattern。
     lora_cfg = config.get("lora", {})
-    adaptive_cfg = config.get("adaptive_lora", {})
     method = str(lora_cfg.get("method", "qlora")).lower()
 
     rank = int(lora_cfg.get("r", lora_cfg.get("base_r", 16)))
     alpha = int(lora_cfg.get("lora_alpha", rank * 2))
-    rank_pattern = None
-    alpha_pattern = None
-    if method == "adaqlora":
-        rank_pattern, alpha_pattern = load_rank_patterns(adaptive_cfg.get("rank_pattern_output"))
-
     kwargs = {
         "r": rank,
         "lora_alpha": alpha,
@@ -95,23 +115,16 @@ def build_lora_config(config: dict[str, Any], lora_config_cls: Any) -> Any:
         "task_type": lora_cfg.get("task_type", "CAUSAL_LM"),
         "target_modules": list(lora_cfg.get("target_modules", [])),
     }
-    if rank_pattern:
+    if method == "adaqlora":
+        rank_pattern, alpha_pattern = load_or_build_rank_patterns(config)
         kwargs["rank_pattern"] = rank_pattern
-    if alpha_pattern:
         kwargs["alpha_pattern"] = alpha_pattern
+        print(f"Loaded AdaQLoRA rank patterns: {len(rank_pattern)} modules", flush=True)
     return lora_config_cls(**kwargs)
 
 
-def map_text_field(dataset: Any, template: str) -> Any:
-    # 为每条样本增加 text 字段，供 TRL SFTTrainer 直接读取。
-    def add_text(record: dict[str, Any]) -> dict[str, str]:
-        return {"text": format_example(record, template)}
-
-    return dataset.map(add_text)
-
-
 def build_sft_config(config: dict[str, Any], sft_config_cls: Any) -> Any:
-    # 构造 TRL SFTConfig，并按当前安装版本过滤不支持的参数。
+    # 构造 TRL SFTConfig，并过滤当前 TRL 版本不支持的参数。
     training_cfg = config.get("training", {})
     data_cfg = config.get("data", {})
     experiment_cfg = config.get("experiment", {})
@@ -140,12 +153,11 @@ def build_sft_config(config: dict[str, Any], sft_config_cls: Any) -> Any:
     }
     signature = inspect.signature(sft_config_cls.__init__)
     allowed = set(signature.parameters)
-    filtered = {key: value for key, value in kwargs.items() if key in allowed and value is not None}
-    return sft_config_cls(**filtered)
+    return sft_config_cls(**{key: value for key, value in kwargs.items() if key in allowed and value is not None})
 
 
 def build_trainer(trainer_cls: Any, model: Any, tokenizer: Any, peft_config: Any, sft_args: Any, datasets: Any) -> Any:
-    # 兼容不同 TRL 版本的 SFTTrainer 参数名。
+    # 兼容不同 TRL 版本中 tokenizer/processing_class 参数名差异。
     trainer_kwargs = {
         "model": model,
         "args": sft_args,
@@ -164,7 +176,7 @@ def build_trainer(trainer_cls: Any, model: Any, tokenizer: Any, peft_config: Any
 
 
 def run_training(config: dict[str, Any]) -> None:
-    # 真正的云端训练流程：加载数据、模型、LoRA 配置并启动 SFT。
+    # 云端完整训练流程：加载 MATH 数据、模型、LoRA 配置并启动 SFT。
     import torch
     from datasets import load_dataset
     from peft import LoraConfig, prepare_model_for_kbit_training
@@ -217,7 +229,7 @@ def run_training(config: dict[str, Any]) -> None:
 
 
 def main() -> None:
-    # 命令行入口：接收 YAML 配置路径，后续云端训练会从这里启动。
+    # 命令行入口：接收 YAML 配置路径并启动训练。
     parser = argparse.ArgumentParser(description="Run QLoRA-Math or AdaQLoRA-Math SFT on a cloud GPU host.")
     parser.add_argument("--config", required=True, help="YAML config path.")
     args = parser.parse_args()
@@ -226,8 +238,7 @@ def main() -> None:
     if not config_path.exists():
         raise FileNotFoundError(config_path)
 
-    config = load_config(config_path)
-    run_training(config)
+    run_training(load_config(config_path))
 
 
 if __name__ == "__main__":

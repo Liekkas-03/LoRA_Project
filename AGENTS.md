@@ -14,8 +14,11 @@ This repository is for the LoRA/QLoRA mathematical reasoning fine-tuning project
 ## Project Direction
 
 - Research priority: AdaQLoRA-Math, a difficulty-aware adaptive QLoRA method for mathematical reasoning.
-- Main datasets: GSM8K and MATH.
-- Main method components: difficulty-aware rank allocation, curriculum LoRA, verifier-guided replay, and efficiency analysis.
+- Main dataset: MATH.
+- Use MATH official `Level 1-5` as the primary difficulty source.
+- Difficulty grouping: `easy = Level 1-2`, `medium = Level 3`, `hard = Level 4-5`.
+- GSM8K is no longer part of the main research pipeline; use it only as an optional generalization experiment if explicitly requested.
+- Main method components: difficulty-aware rank allocation first; curriculum LoRA and verifier-guided replay are later extensions and should not be documented as active unless implemented.
 - Application target: mathematical problem-solving tutor demo.
 
 ## Naming Policy

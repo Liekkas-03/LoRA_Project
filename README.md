@@ -1,25 +1,18 @@
 # AdaQLoRA-Math
 
-本项目研究 **AdaQLoRA-Math：面向数学推理的难度感知自适应 QLoRA 微调**，目标是在单卡云 GPU 条件下，用 LoRA/QLoRA 完成可复现实验，并把科研结果转化为数学解题辅导系统。
+本项目研究 **AdaQLoRA-Math：面向 MATH 官方难度等级的自适应 QLoRA 微调方法**。当前科研主线只使用 MATH 数据集，利用其官方 `Level 1-5` 难度标签构建难度感知训练、分层评测和 LoRA rank 分配实验。
 
-当前阶段是项目骨架搭建：本地只放轻量脚本、配置、文档和评测工具；PyTorch、Transformers、PEFT、bitsandbytes 等重依赖只在 AutoDL 等云平台安装和运行。
+本地环境只做轻量开发：文档、配置、数据处理脚本、评测工具和结果整理。PyTorch、Transformers、PEFT、bitsandbytes 等重依赖只在 AutoDL 等云 GPU 环境中安装和运行。
 
 ## 研究主线
 
 - 方法名：`AdaQLoRA-Math`
-- 主任务：数学推理监督微调
-- 主数据集：`GSM8K`、`MATH`
-- 主模型：`Qwen2.5-Math-7B` 或 `Qwen2.5-Math-7B-Instruct`
-- 核心方法：difficulty-aware rank allocation、curriculum LoRA、verifier-guided replay
-- 主要评测：最终答案准确率、分难度准确率、错误类型、训练显存、训练时间、adapter 大小
-
-## 环境原则
-
-- 本地环境不安装 PyTorch/CUDA/大模型训练库。
-- 本地依赖只用于轻量数据处理和评测。
-- 如果需要在本地安装超过 `1GB` 的依赖，必须先获得用户确认。
-- GPU 训练、模型下载和大型依赖安装放到 AutoDL 云端执行。
-- 项目长期规则见 [AGENTS.md](AGENTS.md)。
+- 主数据集：`MATH`
+- 基座模型：`Qwen2.5-Math-7B` 或 `Qwen2.5-Math-7B-Instruct`
+- 难度划分：`easy = Level 1-2`，`medium = Level 3`，`hard = Level 4-5`
+- 主对比：`QLoRA-Math` vs `AdaQLoRA-Math`
+- 当前方法重点：将统一 LoRA rank 改为分层 rank pattern，让不同 Transformer 层使用不同 LoRA 容量
+- 后续扩展：参数量公平消融、课程学习、错误样本 replay、效率分析
 
 ## 目录结构
 
@@ -28,124 +21,93 @@ LoRA_Project/
   AGENTS.md
   README.md
   Scheme.md
-  requirements-local.txt
-  requirements-gpu.txt
   configs/
     qlora_math.yaml
     adaqlora_math.yaml
   data/
     samples/
       math_preds.jsonl
-      gsm8k_raw.jsonl
       math_raw/
   docs/
     autodl_steps.md
-    autodl_setup.md
-    data_protocol.md
-    baseline_run.md
+    adaqlora_result.md
   scripts/
     local_smoke.ps1
     autodl_train.sh
+    autodl_generate.sh
   src/
     data/
-      prepare_gsm8k.py
       prepare_math.py
       split_data.py
-      merge_data.py
       difficulty_scorer.py
     eval/
       extract_answer.py
       math_verifier.py
       evaluate_accuracy.py
       error_classifier.py
-    lora/
-      rank_allocator.py
     infer/
       generate_answers.py
+    lora/
+      rank_allocator.py
     train/
+      prompting.py
       train_sft.py
   outputs/
-    logs/
     reports/
 ```
 
-## 本地可做的事
+## 本地轻量检查
 
-本地只运行标准库脚本，不需要安装重依赖。
-
-准备小样例数据：
-
-```powershell
-python -m src.data.prepare_gsm8k --input data\samples\gsm8k_raw.jsonl --output outputs\reports\gsm8k_prepared_sample.jsonl --split train
-python -m src.data.prepare_math --input-dir data\samples\math_raw --output outputs\reports\math_prepared_sample.jsonl --split train
-python -m src.data.split_data --input outputs\reports\gsm8k_prepared_sample.jsonl --train-output outputs\reports\gsm8k_train_sample.jsonl --dev-output outputs\reports\gsm8k_dev_sample.jsonl --dev-ratio 0.5 --seed 42
-python -m src.data.merge_data --inputs outputs\reports\gsm8k_train_sample.jsonl outputs\reports\math_prepared_sample.jsonl --output outputs\reports\train_sample.jsonl
-```
-
-评测小样例预测：
-
-```powershell
-python -m src.eval.evaluate_accuracy --input data\samples\math_preds.jsonl
-python -m src.eval.error_classifier --input data\samples\math_preds.jsonl --output outputs\reports\sample_errors.jsonl
-python -m src.data.difficulty_scorer --input data\samples\math_preds.jsonl --output outputs\reports\sample_scored.jsonl
-```
-
-如果当前机器的 `python` 命令不可用，运行轻量 smoke test 脚本即可；它会优先使用 `D:\Anaconda3\python.exe`：
+本地不安装训练依赖，只运行标准库脚本：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\local_smoke.ps1
 ```
 
-## 云端训练流程
+这个脚本会检查 MATH 样例转换、按官方难度划分 train/dev、小样本评测和难度重标注流程。
 
-AutoDL 上不要直接在系统盘默认 miniconda 环境里安装 GPU 依赖。推荐先在数据盘安装自己的 Miniconda，再安装 PyTorch 和项目依赖：
+## AutoDL 主流程
 
-```bash
-cd /root/autodl-tmp
-mkdir -p /root/autodl-tmp/installers /root/autodl-tmp/pip_cache /root/autodl-tmp/hf_cache /root/autodl-tmp/conda_pkgs
-if [ ! -d /root/autodl-tmp/miniconda3 ]; then
-  wget -O /root/autodl-tmp/installers/miniconda.sh https://mirrors.tuna.tsinghua.edu.cn/anaconda/miniconda/Miniconda3-latest-Linux-x86_64.sh
-  bash /root/autodl-tmp/installers/miniconda.sh
-fi
-source /root/autodl-tmp/miniconda3/bin/activate
-conda init
-source ~/.bashrc
-export CONDA_PKGS_DIRS=/root/autodl-tmp/conda_pkgs
-if ! conda env list | grep -q "/root/autodl-tmp/miniconda3/envs/lora"; then
-  conda create -n lora python=3.10 -y
-fi
-conda activate lora
-export PIP_CACHE_DIR=/root/autodl-tmp/pip_cache
-export HF_HOME=/root/autodl-tmp/hf_cache
-export HF_ENDPOINT=https://hf-mirror.com
-python -m pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple
-pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
-cd /root/autodl-tmp/LoRA_Project
-pip install --no-cache-dir -r requirements-gpu.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
-```
-
-详细步骤见 [docs/autodl_steps.md](docs/autodl_steps.md)，里面也写了如何使用镜像中已经配好的 Qwen 7B 本地模型。
-
-启动 QLoRA baseline：
+完整云端步骤见 [docs/autodl_steps.md](docs/autodl_steps.md)。核心流程如下：
 
 ```bash
+python -m src.data.prepare_math \
+  --input-dir data/raw/math/MATH/train \
+  --output data/processed/math_train.jsonl \
+  --split train
+
+python -m src.data.prepare_math \
+  --input-dir data/raw/math/MATH/test \
+  --output data/processed/math_test.jsonl \
+  --split test
+
+python -m src.data.split_data \
+  --input data/processed/math_train.jsonl \
+  --train-output data/processed/math_train_split.jsonl \
+  --dev-output data/processed/math_dev.jsonl \
+  --dev-ratio 0.1 \
+  --seed 42 \
+  --stratify-field difficulty_group
+
 bash scripts/autodl_train.sh configs/qlora_math.yaml
-```
-
-启动 AdaQLoRA-Math：
-
-```bash
 bash scripts/autodl_train.sh configs/adaqlora_math.yaml
 ```
 
-详细云端说明见 [docs/autodl_setup.md](docs/autodl_setup.md)，baseline 运行清单见 [docs/baseline_run.md](docs/baseline_run.md)，可直接照做的 AutoDL 步骤见 [docs/autodl_steps.md](docs/autodl_steps.md)。
+训练完成后在云端生成预测并评测：
 
-## 第一阶段目标
+```bash
+bash scripts/autodl_generate.sh \
+  /root/models/Qwen/Qwen2.5-Math-7B-Instruct \
+  outputs/adapters/adaqlora_math \
+  data/processed/math_test.jsonl \
+  outputs/reports/math_test_ada_preds.jsonl \
+  512
 
-1. 跑通 GSM8K/MATH 数据读取和格式统一。
-2. 跑通答案抽取与准确率评测。
-3. 建立 zero-shot/few-shot baseline 评测脚本。
-4. 在 AutoDL 上跑通 QLoRA baseline。
-5. 加入难度分层、rank pattern、curriculum 和 replay 消融。
+python -m src.eval.evaluate_accuracy \
+  --input outputs/reports/math_test_ada_preds.jsonl \
+  --output outputs/reports/math_test_ada_metrics.json
+```
 
-数据协议见 [docs/data_protocol.md](docs/data_protocol.md)。
+## 历史结果
+
+根目录下保留的 `qlora_math_formal_*.tar.gz` 和 `adaqlora_math_formal_*.tar.gz` 是此前探索实验的导出结果。它们不会删除，但新科研主线以 MATH-only 重新跑出的结果为准。历史结果解释见 [docs/adaqlora_result.md](docs/adaqlora_result.md)。

@@ -1,10 +1,7 @@
-"""Generate PEFT rank_pattern and alpha_pattern templates.
+"""生成 AdaQLoRA-Math 使用的 rank_pattern 和 alpha_pattern。
 
-This helper is lightweight and does not import PyTorch or PEFT. The generated
-JSON can later be converted into a PEFT LoraConfig on the cloud GPU machine.
-
-本文件负责生成自适应 LoRA 的 rank_pattern 和 alpha_pattern 模板，
-后续可在 AutoDL 上接入 PEFT 的 LoraConfig，实现不同层使用不同 rank。
+本文件不导入 PyTorch/PEFT，适合本地轻量运行。生成的 JSON 会在
+AutoDL 训练时注入 PEFT LoraConfig。
 """
 
 from __future__ import annotations
@@ -26,7 +23,7 @@ DEFAULT_MODULES = (
 
 
 def parse_indices(raw: str) -> set[int]:
-    # 将 "0-3,8" 这类层编号字符串解析成整数集合。
+    # 将 "0-3,8,10-12" 解析成层编号集合。
     indices: set[int] = set()
     if not raw:
         return indices
@@ -42,6 +39,15 @@ def parse_indices(raw: str) -> set[int]:
     return indices
 
 
+def layer_rank(layer_idx: int, low_layers: set[int], high_layers: set[int], low_r: int, mid_r: int, high_r: int) -> int:
+    # 根据层编号决定当前层使用低、中、高哪一档 LoRA rank。
+    if layer_idx in high_layers:
+        return high_r
+    if layer_idx in low_layers:
+        return low_r
+    return mid_r
+
+
 def build_patterns(
     num_layers: int,
     low_layers: set[int],
@@ -51,21 +57,13 @@ def build_patterns(
     high_r: int,
     modules: tuple[str, ...] = DEFAULT_MODULES,
 ) -> dict[str, dict[str, int]]:
-    # 按层编号和模块名生成 rank/alpha 配置，供 PEFT 后续匹配模型参数名。
+    # 为每个 Transformer 层和目标模块生成 PEFT 可识别的正则 pattern。
     rank_pattern: dict[str, int] = {}
     alpha_pattern: dict[str, int] = {}
 
     for layer_idx in range(num_layers):
-        # 高敏感层用更大 rank，低敏感层用更小 rank，其余层使用默认 rank。
-        if layer_idx in high_layers:
-            rank = high_r
-        elif layer_idx in low_layers:
-            rank = low_r
-        else:
-            rank = mid_r
-
+        rank = layer_rank(layer_idx, low_layers, high_layers, low_r, mid_r, high_r)
         for module in modules:
-            # pattern 用正则匹配类似 layers.20.xxx.q_proj 的模块名。
             pattern = rf".*layers\.{layer_idx}\..*{module}$"
             rank_pattern[pattern] = rank
             alpha_pattern[pattern] = rank * 2
@@ -73,8 +71,21 @@ def build_patterns(
     return {"rank_pattern": rank_pattern, "alpha_pattern": alpha_pattern}
 
 
+def summarize_ranks(rank_pattern: dict[str, int]) -> dict[str, float]:
+    # 简单统计 rank pattern，方便检查是否真的生成了分层 rank。
+    values = list(rank_pattern.values())
+    if not values:
+        return {"count": 0, "min": 0, "max": 0, "mean": 0.0}
+    return {
+        "count": len(values),
+        "min": min(values),
+        "max": max(values),
+        "mean": round(sum(values) / len(values), 4),
+    }
+
+
 def main() -> None:
-    # 命令行入口：根据层范围和 rank 参数生成 JSON 配置文件。
+    # 命令行入口：生成 AdaQLoRA-Math 的 rank/alpha JSON。
     parser = argparse.ArgumentParser(description="Generate adaptive LoRA rank/alpha pattern JSON.")
     parser.add_argument("--num-layers", type=int, default=28)
     parser.add_argument("--low-layers", default="0-3")
@@ -97,7 +108,7 @@ def main() -> None:
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(patterns, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({"output": str(output_path), "patterns": len(patterns["rank_pattern"])}, indent=2))
+    print(json.dumps({"output": str(output_path), "summary": summarize_ranks(patterns["rank_pattern"])}, indent=2))
 
 
 if __name__ == "__main__":
