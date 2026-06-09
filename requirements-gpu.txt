@@ -4,6 +4,7 @@
 accelerate
 bitsandbytes
 datasets
+math-verify[antlr4_13_2]
 peft
 protobuf
 pyyaml
@@ -16,4 +17,3 @@ trl
 # Optional for later serving/demo on the cloud:
 # gradio
 # vllm
-

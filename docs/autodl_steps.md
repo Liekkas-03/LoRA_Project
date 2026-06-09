@@ -81,6 +81,12 @@ pip install --no-cache-dir torch torchvision torchaudio --index-url https://down
 pip install --no-cache-dir -r requirements-gpu.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
+如果你之前已经装过环境，只想补上更主流的数学判题器，可以单独执行：
+
+```bash
+pip install --no-cache-dir math-verify[antlr4_13_2] -i https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
 ## 3. 找到本地 Qwen 模型路径
 
 如果镜像已经内置 Qwen 模型，先查找：
@@ -230,6 +236,7 @@ bash scripts/autodl_generate.sh \
 
 python -m src.eval.evaluate_accuracy \
   --input outputs/reports/math_test_qlora_preds.jsonl \
+  --backend math_verify \
   --output outputs/reports/math_test_qlora_metrics.json
 ```
 
@@ -245,8 +252,29 @@ bash scripts/autodl_generate.sh \
 
 python -m src.eval.evaluate_accuracy \
   --input outputs/reports/math_test_ada_preds.jsonl \
+  --backend math_verify \
   --output outputs/reports/math_test_ada_metrics.json
 ```
+
+如果你已经有历史的 `preds.jsonl` 文件，不想重新训练，也不想重新生成，可以直接只重跑评测：
+
+```bash
+python -m src.eval.evaluate_accuracy \
+  --input outputs/reports/math_dev_qlora_preds.jsonl \
+  --backend math_verify \
+  --output outputs/reports/math_dev_qlora_metrics_math_verify.json
+
+python -m src.eval.evaluate_accuracy \
+  --input outputs/reports/math_dev_ada_preds.jsonl \
+  --backend math_verify \
+  --output outputs/reports/math_dev_ada_metrics_math_verify.json
+```
+
+说明：
+
+- `--backend math_verify` 会优先用 `Math-Verify` 做最终答案抽取与等价判分。
+- 这一步只重算准确率，不会重新训练模型。
+- 如果环境里没有安装 `Math-Verify`，脚本会提示你先安装对应依赖。
 
 ## 9. 导出结果
 

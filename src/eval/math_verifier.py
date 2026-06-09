@@ -9,6 +9,10 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 from fractions import Fraction
 import re
+from typing import Any, Literal
+
+
+VerifierBackend = Literal["simple", "math_verify"]
 
 
 def normalize_answer(value: str | None) -> str:
@@ -83,3 +87,105 @@ def looks_like_number(value: str | None) -> bool:
     if not value:
         return False
     return bool(re.search(r"-?\d", value))
+
+
+def math_verify_available() -> bool:
+    # 轻量探测 Math-Verify 是否已安装，避免本地强依赖。
+    try:
+        import math_verify  # type: ignore  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+def resolve_backend(requested: Literal["auto", "simple", "math_verify"]) -> VerifierBackend:
+    # 根据环境自动选择评测后端；云端装了 Math-Verify 就优先使用它。
+    if requested == "simple":
+        return "simple"
+    if requested == "math_verify":
+        if not math_verify_available():
+            raise ImportError(
+                "Math-Verify is not installed. Install it on AutoDL with "
+                "`pip install math-verify[antlr4_13_2]`."
+            )
+        return "math_verify"
+    return "math_verify" if math_verify_available() else "simple"
+
+
+def _looks_like_bare_latex(text: str) -> bool:
+    # 对像 \frac{1}{2} 这种裸 LaTeX 做一次保守识别，便于 Math-Verify 补救解析。
+    if "\\" not in text:
+        return False
+    latex_markers = ("\\frac", "\\sqrt", "\\pi", "\\theta", "\\alpha", "\\beta", "\\gamma", "\\boxed")
+    if not any(marker in text for marker in latex_markers):
+        return False
+    wrapped_markers = ("$", "\\(", "\\[", "\\boxed")
+    return not any(marker in text for marker in wrapped_markers)
+
+
+def _load_math_verify_symbols() -> tuple[Any, Any, Any, Any]:
+    # 延迟导入 Math-Verify，避免本地轻量环境被重依赖拖慢。
+    from math_verify import parse, verify  # type: ignore
+    from math_verify.parser import ExprExtractionConfig, LatexExtractionConfig  # type: ignore
+
+    return parse, verify, LatexExtractionConfig, ExprExtractionConfig
+
+
+def _parse_with_math_verify(value: str | None, is_reference: bool) -> tuple[Any | None, bool]:
+    # 用 Math-Verify 解析答案；参考答案和预测答案使用略有区别的提取配置。
+    if value is None:
+        return None, False
+
+    text = str(value).strip()
+    if not text:
+        return None, False
+
+    parse, _verify, latex_config_cls, expr_config_cls = _load_math_verify_symbols()
+
+    if is_reference:
+        extraction_config = [latex_config_cls(), expr_config_cls()]
+    else:
+        extraction_config = [latex_config_cls(boxed_match_priority=0), expr_config_cls()]
+
+    candidates = [text]
+    if _looks_like_bare_latex(text):
+        candidates.append(f"${text}$")
+
+    for candidate in candidates:
+        try:
+            parsed = parse(candidate, extraction_config=extraction_config)
+        except Exception:
+            continue
+        if parsed:
+            return parsed, True
+    return None, False
+
+
+def compare_answers(
+    prediction: str | None,
+    reference: str | None,
+    backend: VerifierBackend = "simple",
+) -> tuple[bool, bool, bool]:
+    # 统一比较入口：返回是否正确、预测是否成功抽取、参考答案是否成功抽取。
+    if backend == "simple":
+        from src.eval.extract_answer import extract_answer
+
+        pred_answer = extract_answer(prediction)
+        ref_answer = extract_answer(reference)
+        return equivalent(pred_answer, ref_answer), pred_answer is not None, ref_answer is not None
+
+    reference_parsed, has_reference = _parse_with_math_verify(reference, is_reference=True)
+    prediction_parsed, has_prediction = _parse_with_math_verify(prediction, is_reference=False)
+
+    if not has_prediction or not has_reference:
+        return False, has_prediction, has_reference
+
+    try:
+        _parse, verify, _latex_config_cls, _expr_config_cls = _load_math_verify_symbols()
+        return bool(verify(reference_parsed, prediction_parsed)), True, True
+    except Exception:
+        from src.eval.extract_answer import extract_answer
+
+        pred_answer = extract_answer(prediction)
+        ref_answer = extract_answer(reference)
+        return equivalent(pred_answer, ref_answer), pred_answer is not None, ref_answer is not None
