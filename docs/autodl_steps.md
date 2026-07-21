@@ -224,6 +224,33 @@ Loaded AdaQLoRA rank patterns: 196 modules
 
 ## 8. 生成预测并评测
 
+当前生成脚本默认使用 `qwen25-math-cot`，即 Qwen2.5-Math 官方 CoT 风格：
+
+- 使用 chat template
+- system prompt 要求逐步推理
+- 最终答案要求放在 `\boxed{}`
+
+如果需要复现早期历史结果，可以在命令最后显式追加 `project_math_cot`。
+
+先建议跑一个纯基座模型对照，用来检查 prompt / 生成 / 评测流程是否已经接近官方设置：
+
+```bash
+bash scripts/autodl_generate.sh \
+  /root/models/Qwen/Qwen2.5-Math-7B-Instruct \
+  none \
+  data/processed/math_dev.jsonl \
+  outputs/reports/math_dev_base_qwen25_preds.jsonl \
+  512 \
+  qwen25-math-cot
+
+python -m src.eval.evaluate_accuracy \
+  --input outputs/reports/math_dev_base_qwen25_preds.jsonl \
+  --backend math_verify \
+  --output outputs/reports/math_dev_base_qwen25_metrics.json
+
+cat outputs/reports/math_dev_base_qwen25_metrics.json
+```
+
 QLoRA：
 
 ```bash
@@ -232,7 +259,8 @@ bash scripts/autodl_generate.sh \
   outputs/adapters/qlora_math_formal \
   data/processed/math_test.jsonl \
   outputs/reports/math_test_qlora_preds.jsonl \
-  512
+  512 \
+  qwen25-math-cot
 
 python -m src.eval.evaluate_accuracy \
   --input outputs/reports/math_test_qlora_preds.jsonl \
@@ -248,7 +276,8 @@ bash scripts/autodl_generate.sh \
   outputs/adapters/adaqlora_math_formal \
   data/processed/math_test.jsonl \
   outputs/reports/math_test_ada_preds.jsonl \
-  512
+  512 \
+  qwen25-math-cot
 
 python -m src.eval.evaluate_accuracy \
   --input outputs/reports/math_test_ada_preds.jsonl \

@@ -2,6 +2,7 @@
 
 本文件在 AutoDL 上加载 base model 与 LoRA adapter，对 MATH dev/test
 样本生成 prediction 字段。本地不需要安装 PyTorch 或 Transformers。
+默认使用 Qwen2.5-Math 官方 CoT 风格 prompt。
 """
 
 from __future__ import annotations
@@ -10,6 +11,9 @@ import argparse
 import json
 from pathlib import Path
 from typing import Any
+
+
+QWEN25_MATH_COT_SYSTEM = "Please reason step by step, and put your final answer within \\boxed{}."
 
 
 def read_jsonl(path: Path, limit: int | None = None) -> list[dict[str, Any]]:
@@ -37,8 +41,8 @@ def write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-def build_prompt(record: dict[str, Any]) -> str:
-    # 推理时只给题目，不能泄露标准 solution 或 answer。
+def build_project_prompt(record: dict[str, Any]) -> str:
+    # 项目早期使用的简化 prompt，保留用于历史结果复现。
     question = str(record.get("question", "")).strip()
     return (
         "Question:\n"
@@ -46,6 +50,37 @@ def build_prompt(record: dict[str, Any]) -> str:
         "Solution:\n"
         "Let's solve the problem step by step. End with Final Answer: <answer>.\n"
     )
+
+
+def build_qwen25_math_cot_prompt(record: dict[str, Any], tokenizer: Any) -> str:
+    # Qwen2.5-Math 官方 CoT 风格：chat template + boxed final answer。
+    question = str(record.get("question", "")).strip()
+    messages = [
+        {"role": "system", "content": QWEN25_MATH_COT_SYSTEM},
+        {"role": "user", "content": question},
+    ]
+    if hasattr(tokenizer, "apply_chat_template"):
+        return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    return f"<|im_start|>system\n{QWEN25_MATH_COT_SYSTEM}<|im_end|>\n<|im_start|>user\n{question}<|im_end|>\n<|im_start|>assistant\n"
+
+
+def build_prompt(record: dict[str, Any], tokenizer: Any, prompt_type: str) -> str:
+    # 统一 prompt 入口；推理时只给题目，不能泄露标准 solution 或 answer。
+    if prompt_type == "project_math_cot":
+        return build_project_prompt(record)
+    if prompt_type == "qwen25-math-cot":
+        return build_qwen25_math_cot_prompt(record, tokenizer)
+    raise ValueError(f"Unsupported prompt_type: {prompt_type}")
+
+
+def normalize_adapter_path(adapter_path: str | None) -> str | None:
+    # 允许用 none/base 跑纯基座模型，便于检查 prompt 和评测流程。
+    if adapter_path is None:
+        return None
+    normalized = adapter_path.strip()
+    if normalized.lower() in {"", "none", "null", "base", "-"}:
+        return None
+    return normalized
 
 
 def load_model(
@@ -93,6 +128,7 @@ def load_model(
         torch_dtype=torch_dtype,
         quantization_config=quant_config,
     )
+    adapter_path = normalize_adapter_path(adapter_path)
     if adapter_path:
         model = PeftModel.from_pretrained(model, adapter_path)
     model.eval()
@@ -132,13 +168,16 @@ def generate_records(
     load_in_4bit: bool,
     torch_dtype: str,
     max_new_tokens: int,
+    prompt_type: str,
 ) -> list[dict[str, Any]]:
     # 批量生成 prediction，并保留原始字段方便分难度评测。
     tokenizer, model = load_model(base_model, adapter_path, load_in_4bit, torch_dtype)
     results: list[dict[str, Any]] = []
     for index, record in enumerate(records, start=1):
-        prediction = generate_one(tokenizer, model, build_prompt(record), max_new_tokens)
+        prompt = build_prompt(record, tokenizer, prompt_type)
+        prediction = generate_one(tokenizer, model, prompt, max_new_tokens)
         output_record = dict(record)
+        output_record["prompt_type"] = prompt_type
         output_record["prediction"] = prediction
         results.append(output_record)
         print(f"generated {index}/{len(records)}", flush=True)
@@ -153,6 +192,12 @@ def main() -> None:
     parser.add_argument("--input", required=True, help="Input JSONL path.")
     parser.add_argument("--output", required=True, help="Output JSONL path with prediction field.")
     parser.add_argument("--max-new-tokens", type=int, default=512)
+    parser.add_argument(
+        "--prompt-type",
+        default="qwen25-math-cot",
+        choices=("qwen25-math-cot", "project_math_cot"),
+        help="Prompt style. qwen25-math-cot follows the official Qwen2.5-Math CoT chat prompt.",
+    )
     parser.add_argument("--limit", type=int, help="Optional sample limit for quick smoke generation.")
     parser.add_argument(
         "--torch-dtype",
@@ -170,6 +215,7 @@ def main() -> None:
         load_in_4bit=not args.no_4bit,
         torch_dtype=args.torch_dtype,
         max_new_tokens=args.max_new_tokens,
+        prompt_type=args.prompt_type,
     )
     write_jsonl(Path(args.output), results)
     print(f"saved predictions to {args.output}")
